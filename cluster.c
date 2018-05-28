@@ -5722,7 +5722,7 @@ clusterNode *getNodeByQuery(redisClient *c, struct redisCommand *cmd, robj **arg
     /* If we don't have all the keys and we are migrating the slot, send
      * an ASK redirection. */
     if (migrating_slot && missing_keys) {
-        if (error_code) *error_code = REDIS_CLUSTER_REDIR_ASK;
+        if (error_code) *error_code = REDIS_CLUSTER_REDIR_ASK; // 如果正在迁徙节点数据，发一次ask转向就可以了，不需要moved
         return server.cluster->migrating_slots_to[slot];
     }
 
@@ -5754,7 +5754,7 @@ clusterNode *getNodeByQuery(redisClient *c, struct redisCommand *cmd, robj **arg
 
     /* Base case: just return the right node. However if this node is not
      * myself, set error_code to MOVED since we need to issue a rediretion. */
-    if (n != myself && error_code) *error_code = REDIS_CLUSTER_REDIR_MOVED;
+    if (n != myself && error_code) *error_code = REDIS_CLUSTER_REDIR_MOVED; // 发送moved指令，将长期转向
 
     // 返回负责处理槽 slot 的节点 n
     return n;
