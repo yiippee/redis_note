@@ -382,7 +382,11 @@ void replicationFeedMonitors(redisClient *c, list *monitors, int dictid, robj **
 }
 
 /* Feed the slave 'c' with the replication backlog starting from the
- * specified 'offset' up to the end of the backlog. */
+ * specified 'offset' up to the end of the backlog. 
+ * 主节点确认可以为从节点进行部分重同步时，
+ * 首先就是调用addReplyReplicationBacklog函数，将积压队列中，
+ * 全局偏移量为offset的字节，到尾字节之间的所有内容，追加到从节点客户端的输出缓存中
+ * */
 // 向从服务器 c 发送 backlog 中从 offset 到 backlog 尾部之间的数据
 long long addReplyReplicationBacklog(redisClient *c, long long offset) {
     long long j, skip, len;
@@ -440,8 +444,10 @@ long long addReplyReplicationBacklog(redisClient *c, long long offset) {
  * On success return REDIS_OK, otherwise REDIS_ERR is returned and we proceed
  * with the usual full resync. */
 // 尝试进行部分 resync ，成功返回 REDIS_OK ，失败返回 REDIS_ERR 。
+// 主节点收到从节点的”PSYNC  <runid>  <offset>”消息后，调用函数masterTryPartialResynchronization尝试进行部分重同步
+//  该函数返回REDIS_ERR表示不能进行部分重同步；返回REDIS_OK表示可以进行部分重同步。
 int masterTryPartialResynchronization(redisClient *c) {
-    long long psync_offset, psync_len;
+    long long psync_offset/*该值表示从节点需要接收的下一条命令首字节的偏移量*/, psync_len;
     char *master_runid = c->argv[1]->ptr;
     char buf[128];
     int buflen;
@@ -449,7 +455,7 @@ int masterTryPartialResynchronization(redisClient *c) {
     /* Is the runid of this master the same advertised by the wannabe slave
      * via PSYNC? If runid changed this master is a different instance and
      * there is no way to continue. */
-    // 检查 master id 是否和 runid 一致，只有一致的情况下才有 PSYNC 的可能
+    // 检查 master id 是否和 runid 一致，只有一致的情况下才有 PSYNC 的可能，不一致直接进行全部同步
     if (strcasecmp(master_runid, server.runid)) {
         /* Run id "?" is used by slaves that want to force a full resync. */
         // 从服务器提供的 run id 和服务器的 run id 不一致
@@ -473,8 +479,8 @@ int masterTryPartialResynchronization(redisClient *c) {
         // 如果没有 backlog
     if (!server.repl_backlog ||
         // 或者 psync_offset 小于 server.repl_backlog_off
-        // （想要恢复的那部分数据已经被覆盖）
-        psync_offset < server.repl_backlog_off ||
+        // （想要恢复的那部分数据已经被覆盖），说明断线时间太长啦，数据库更新的数据太多了啊，无法部分同步了，需要完全重新同步了。
+        psync_offset < server.repl_backlog_off || 
         // psync offset 大于 backlog 所保存的数据的偏移量
         psync_offset > (server.repl_backlog_off + server.repl_backlog_histlen))
     {
@@ -506,7 +512,8 @@ int masterTryPartialResynchronization(redisClient *c) {
     listAddNodeTail(server.slaves,c);
     /* We can't use the connection buffers since they are used to accumulate
      * new commands at this stage. But we are sure the socket send buffer is
-     * emtpy so this write will never fail actually. */
+     * emtpy so this write will never fail actually. 
+     * 之前主节点向从节点发送的信息很少，因此内核的输出缓存中应该会有空间，因此这里直接的write操作一般不会出错 */
     // 向从服务器发送一个同步 +CONTINUE ，表示 PSYNC 可以执行
     buflen = snprintf(buf,sizeof(buf),"+CONTINUE\r\n");
     if (write(c->fd,buf,buflen) != buflen) {
