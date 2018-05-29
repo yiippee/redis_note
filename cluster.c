@@ -4251,8 +4251,8 @@ void clusterSetMaster(clusterNode *n) {
     redisAssert(myself->numslots == 0);
 
     if (nodeIsMaster(myself)) {
-        myself->flags &= ~REDIS_NODE_MASTER;
-        myself->flags |= REDIS_NODE_SLAVE;
+        myself->flags &= ~REDIS_NODE_MASTER; // 去除主节点标识
+        myself->flags |= REDIS_NODE_SLAVE;   // 标识为从节点
         clusterCloseAllSlots();
     } else {
         if (myself->slaveof)

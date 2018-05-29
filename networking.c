@@ -684,7 +684,7 @@ void addReplyBulkLen(redisClient *c, robj *obj) {
 
 /* Add a Redis Object as a bulk reply 
  *
- * 返回一个 Redis 对象作为回复
+ * 返回一个 Redis 对象作为回复。添加需要回复的数据，并装载写事件的，下一次事件循环时就会发送了。
  */
 void addReplyBulk(redisClient *c, robj *obj) {
     addReplyBulkLen(c,obj);

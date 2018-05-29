@@ -2485,7 +2485,7 @@ void call(redisClient *c, int flags) {
         if (c->flags & REDIS_FORCE_AOF) flags |= REDIS_PROPAGATE_AOF;
 
         // 如果数据库有被修改，那么启用 REPL 和 AOF 传播
-        if (dirty)
+        if (dirty) // dirty表示自从上次 SAVE 执行以来，数据库被修改的次数
             flags |= (REDIS_PROPAGATE_REPL | REDIS_PROPAGATE_AOF);
 
         if (flags != REDIS_PROPAGATE_NONE)

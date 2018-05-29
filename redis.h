@@ -643,7 +643,7 @@ typedef struct redisClient {
     sds replpreamble;       /* replication DB preamble. */
 
     // 主服务器的复制偏移量
-    long long reploff;      /* replication offset if this is our master */
+    long long reploff;  // 从服务器最后接收命令的偏移量    /* replication offset if this is our master */
     // 从服务器最后一次发送 REPLCONF ACK 时的偏移量
     long long repl_ack_off; /* replication ack offset, if this is a slave */
     // 从服务器最后一次发送 REPLCONF ACK 的时间
@@ -1136,6 +1136,7 @@ struct redisServer {
 
 
     /* Replication (master) */
+    // 主从复制中关于主服务器的参数
     int slaveseldb;                 /* Last SELECTed DB in replication output */
     // 全局复制偏移量（一个累计值）
     long long master_repl_offset;   /* Global replication offset */
@@ -1170,6 +1171,7 @@ struct redisServer {
 
 
     /* Replication (slave) */
+    // 主从复制中关于从服务器的参数
     // 主服务器的验证密码
     char *masterauth;               /* AUTH with this password with master */
     // 主服务器的地址
@@ -1179,7 +1181,7 @@ struct redisServer {
     // 超时时间
     int repl_timeout;               /* Timeout after N seconds of master idle */
     // 主服务器所对应的客户端
-    redisClient *master;     /* Client that is master for this slave */
+    redisClient *master; // 如果本服务器是从服务器，那么需要这个客户端来代理自己访问主服务器    /* Client that is master for this slave */
     // 被缓存的主服务器，PSYNC 时使用
     redisClient *cached_master; /* Cached master to be reused for PSYNC. */
     int repl_syncio_timeout; /* Timeout for synchronous I/O calls */
@@ -1210,7 +1212,7 @@ struct redisServer {
     // 从服务器优先级
     int slave_priority;             /* Reported in INFO and used by Sentinel. */
     // 本服务器（从服务器）当前主服务器的 RUN ID
-    char repl_master_runid[REDIS_RUN_ID_SIZE+1];  /* Master run id for PSYNC. */
+    char repl_master_runid[REDIS_RUN_ID_SIZE+1]; // 主服务器ID /* Master run id for PSYNC. */
     // 初始化偏移量
     long long repl_master_initial_offset;         /* Master PSYNC offset. */
 

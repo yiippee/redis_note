@@ -30,7 +30,26 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+/*
+ redis的同步分为部分重同步和完整重同步：
+    1）完整重同步：通过主服务器创建rdb文件发送给从服务器，同时将从开始创建rdb文件后执行的写命令记录
+        在一个缓冲区，然后在传输完rdb文件后将发送缓冲区中的记录发送给从服务器。
 
+    2）部分重同步：主服务器将主从连接断开期间执行的写命令，发送给从服务器，从服务器执行这些命令就能
+        保持与主服务器状态一致。
+
+同步的应用场景有两种,初次同步和断线重连后同步：
+    1）初次同步使用完全重同步。
+    2）断线后同步由于在断开连接后，会创建master的cache用于之后断线重连以避免进行完整重同步。这样我们
+       就需要一个变量来记录主从服务器偏差——复制偏移量，通过比对主从服务器的复制偏移量确定主从服务器
+       状态一致性。此外，还有一个复制积压缓冲区来记录最近传播的命令，并且复制积压缓冲区的每个字节记录
+       相应的偏移量，这样的设计主要是为了部分重同步。根据判断从服务器的偏移量是否在积压缓冲区内决定部
+      分重同步还是完整重同步。
+
+slave部分的实现
+    1）发送psync给master，psync runid offset;
+    2）根据master的reply，进行部分重同步或者完整重同步；
+*/
 #include "redis.h"
 
 #include <sys/time.h>
@@ -123,25 +142,34 @@ void freeReplicationBacklog(void) {
  *
  * 添加数据到复制 backlog ，
  * 并且按照添加内容的长度更新 server.master_repl_offset 偏移量。
+ * 
+ * 主节点维持一个积压队列。当它收到客户端发来的命令请求时，除了将该命令请求缓存到从节点的输出缓存，还会将命令追加到积压队列中。
+ * 个人感觉backlog的作用：当从机断线后，主机所做的数据库更新（dirty维护）会记录在backlog里面，等从机连接上来后，会根据从机发来的
+ * offset偏移值与自己的offset进行对比，如果一样说明没有更新，如果不同，则需要判定有多少的更新，如果更新的大小在backlog可维护的
+ * 范围内，则可以直接进行部分复制。感觉backlog就是一个缓冲区，便于断线后缓存需要同步的数据，如果更新大于backlog则还是需要全部重新同步的。
  */
 void feedReplicationBacklog(void *ptr, size_t len) {
     unsigned char *p = ptr;
 
+    /*
+    server.master_repl_offse t一个全局性的计数器。该属性只有存在积压队列的情况下才会增加计数。
+    当存在积压队列时，每次收到客户端发来的，长度为len的请求命令时，就会将server.master_repl_offset增加len。
+    */
     // 将长度累加到全局 offset 中
-    server.master_repl_offset += len;
+    server.master_repl_offset += len; 
 
     /* This is a circular buffer, so write as much data we can at every
      * iteration and rewind the "idx" index if we reach the limit. */
     // 环形 buffer ，每次写尽可能多的数据，并在到达尾部时将 idx 重置到头部
     while(len) {
         // 从 idx 到 backlog 尾部的字节数
-        size_t thislen = server.repl_backlog_size - server.repl_backlog_idx;
+        size_t thislen = server.repl_backlog_size/*积压队列server.repl_backlog的总容量*/ - server.repl_backlog_idx;
         // 如果 idx 到 backlog 尾部这段空间足以容纳要写入的内容
         // 那么直接将写入数据长度设为 len
         // 在将这些 len 字节复制之后，这个 while 循环将跳出
         if (thislen > len) thislen = len;
         // 将 p 中的 thislen 字节内容复制到 backlog
-        memcpy(server.repl_backlog+server.repl_backlog_idx,p,thislen);
+        memcpy(server.repl_backlog+server.repl_backlog_idx,p,thislen); // 将 p 中的 thislen 字节内容复制到 backlog
         // 更新 idx ，指向新写入的数据之后
         server.repl_backlog_idx += thislen;
         // 如果写入达到尾部，那么将索引重置到头部
@@ -152,8 +180,9 @@ void feedReplicationBacklog(void *ptr, size_t len) {
         // 将指针移动到已被写入数据的后面，指向未被复制数据的开头
         p += thislen;
         // 增加实际长度
-        server.repl_backlog_histlen += thislen;
+        server.repl_backlog_histlen += thislen; //  server.repl_backlog_histlen：积压队列server.repl_backlog中，当前累积的数据量的大小
     }
+    // 积压队列是一个空间有限的循环队列，随着命令的追加，不断覆盖之前的命令，积压队列中累积的命令偏移量范围也在不断发生变化
     // histlen 的最大值只能等于 backlog_size
     // 另外，当 histlen 大于 repl_backlog_size 时，
     // 表示写入数据的前头有一部分数据被自己的尾部覆盖了
@@ -172,7 +201,8 @@ void feedReplicationBacklog(void *ptr, size_t len) {
     // 这说明如果从服务器如果从 10057 至 10086 之间的任何时间断线
     // 那么从服务器都可以使用 PSYNC
     server.repl_backlog_off = server.master_repl_offset -
-                              server.repl_backlog_histlen + 1;
+                              server.repl_backlog_histlen + 1; // server.repl_backlog_off 在积压队列中，最早保存的命令的首字节，在全局范围内（而非积压队列内）的偏移量。
+    // 参见 https://blog.csdn.net/gqtcgq/article/details/51287116
 }
 
 /* Wrapper for feedReplicationBacklog() that takes Redis string objects
@@ -278,6 +308,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     }
 
     /* Write the command to every slave. */
+    // 将命令写到该主机的所有从机中
     listRewind(slaves,&li);
     while((ln = listNext(&li))) {
 
@@ -301,6 +332,8 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         /* Finally any additional argument that was not stored inside the
          * static buffer if any (from j to argc). */
         for (j = 0; j < argc; j++)
+            // 每一个slave其实就是一个redisClient，与普通的外部连接上来的客户端意义一样。
+            // 添加需要回复的数据，并装载写事件的，下一次事件循环时就会发送了。主从复制与一般的回复客户信息是一样的。
             addReplyBulk(slave,argv[j]);
     }
 }
@@ -1224,14 +1257,32 @@ int slaveTryPartialResynchronization(int fd) {
         redisLog(REDIS_NOTICE,"Trying a partial resynchronization (request %s:%s).", psync_runid, psync_offset);
     } else {
         // 缓存不存在
-        // 发送 "PSYNC ? -1" ，要求完整重同步
+        // 发送 "PSYNC ? -1" ，要求完整重同步. 用于复制功能(replication)的内部命令。
         redisLog(REDIS_NOTICE,"Partial resynchronization not possible (no cached master)");
         psync_runid = "?";
         memcpy(psync_offset,"-1",3);
     }
 
     /* Issue the PSYNC command */
-    // 向主服务器发送 PSYNC 命令
+    // 向主服务器发送 PSYNC 命令 
+    /*
+        PSYNC <runid> <offset>
+        runid:主服务器ID.每个Redis服务器都会有一个表明自己身份的ID。在PSYNC中发送的这个ID是指之前连接的Master的ID，
+                如果没保存这个ID，PSYNC的命令会使用”PSYNC ? -1” 这种形式发送给Master，表示需要全量复制。
+
+        offset:从服务器最后接收命令的偏移量.在主从复制的Master和Slave双方都会各自维持一个offset。
+                Master成功发送N个字节的命令后会将Master的offset加上N，Slave在接收到N个字节命令后同样会将Slave的offset增加N。
+                Master和Slave如果状态是一致的那么它的的offset也应该是一致的。
+
+        复制积压缓冲区: 复制积压缓冲区是由Master维护的一个固定长度的FIFO队列，它的作用是缓存已经传播出去的命令。
+                当Master进行命令传播时，不仅将命令发送给所有Slave，还会将命令写入到复制积压缓冲区里面。
+
+    它的工作原理是这样：
+        主服务器端为复制流维护一个内存缓冲区（in-memory backlog）。主从服务器都维护一个复制偏移量（replication offset）和master run id ，
+        当连接断开时，从服务器会重新连接上主服务器，然后请求继续复制，假如主从服务器的两个master run id相同，并且指定的偏移量在内存缓冲
+        区中还有效，复制就会从上次中断的点开始继续。如果其中一个条件不满足，就会进行完全重新同步（在2.8版本之前就是直接进行完全重新同步）。
+        因为主运行id不保存在磁盘中，如果从服务器重启了的话就只能进行完全同步了。
+    */
     reply = sendSynchronousCommand(fd,"PSYNC",psync_runid,psync_offset,NULL);
 
     // 接收到 FULLRESYNC ，进行 full-resync
@@ -1312,7 +1363,7 @@ int slaveTryPartialResynchronization(int fd) {
     return PSYNC_NOT_SUPPORTED;
 }
 
-// 从服务器用于同步主服务器的回调函数
+// 从服务器用于同步主服务器的回调函数。syncWithMaster()发送ping命令，身份验证，发送端口信息，通知master自己可以解析rdb，进行同步。
 void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
     char tmpfile[256], *err;
     int dfd, maxtries = 5;
@@ -1325,7 +1376,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
     /* If this event fired after the user turned the instance into a master
      * with SLAVEOF NO ONE we must just return ASAP. */
     // 如果处于 SLAVEOF NO ONE 模式，那么关闭 fd
-    if (server.repl_state == REDIS_REPL_NONE) {
+    if (server.repl_state == REDIS_REPL_NONE) { // 没有活跃的replication，直接返回 
         close(fd);
         return;
     }
@@ -1346,7 +1397,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
      * replication process where we have long timeouts in the order of
      * seconds (in the meantime the slave would block). */
     // 如果状态为 CONNECTING ，那么在进行初次同步之前，
-    // 向主服务器发送一个非阻塞的 PONG 
+    // 向主服务器发送一个非阻塞的 ping 
     // 因为接下来的 RDB 文件发送非常耗时，所以我们想确认主服务器真的能访问
     if (server.repl_state == REDIS_REPL_CONNECTING) {
         redisLog(REDIS_NOTICE,"Non blocking connect for SYNC fired the event.");
@@ -1355,11 +1406,11 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
         // 手动发送同步 PING ，暂时取消监听写事件
         aeDeleteFileEvent(server.el,fd,AE_WRITABLE);
         // 更新状态
-        server.repl_state = REDIS_REPL_RECEIVE_PONG;
+        server.repl_state = REDIS_REPL_RECEIVE_PONG; // 状态更改为正在接收ping的回复命令pong
         /* Send the PING, don't check for errors at all, we have the timeout
          * that will take care about this. */
-        // 同步发送 PING
-        syncWrite(fd,"PING\r\n",6,100);
+        // 同步发送 PING。不需要检查错误，因为有超时机制
+        syncWrite(fd,"PING\r\n",6,100/*超时100ms*/); //socket连接成功，发送ping给master  
 
         // 返回，等待 PONG 到达
         return;
@@ -1367,7 +1418,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
 
     /* Receive the PONG command. */
     // 接收 PONG 命令
-    if (server.repl_state == REDIS_REPL_RECEIVE_PONG) {
+    if (server.repl_state == REDIS_REPL_RECEIVE_PONG) { // 收到pong回复，读出pong回复  
         char buf[1024];
 
         /* Delete the readable event, we no longer need it now that there is
@@ -1412,7 +1463,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
     /* AUTH with the master if required. */
     // 进行身份验证
     if(server.masterauth) {
-        err = sendSynchronousCommand(fd,"AUTH",server.masterauth,NULL);
+        err = sendSynchronousCommand(fd,"AUTH",server.masterauth,NULL);// 同步地发送然后读取身份验证信息
         if (err[0] == '-') {
             redisLog(REDIS_WARNING,"Unable to AUTH to MASTER: %s",err);
             sdsfree(err);
@@ -1486,7 +1537,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
 
     /* Setup the non blocking download of the bulk file. */
     // 设置一个读事件处理器，来读取主服务器的 RDB 文件
-    if (aeCreateFileEvent(server.el,fd, AE_READABLE,readSyncBulkPayload,NULL)
+    if (aeCreateFileEvent(server.el,fd, AE_READABLE,readSyncBulkPayload,NULL) //设置事件回调读取回复过来的同步数据 
             == AE_ERR)
     {
         redisLog(REDIS_WARNING,
@@ -1515,12 +1566,12 @@ error:
     return;
 }
 
-// 以非阻塞方式连接主服务器
+// 以非阻塞方式连接主服务器。 建立套接字连接，设置事件回调syncWithMaster()
 int connectWithMaster(void) {
     int fd;
 
     // 连接主服务器
-    fd = anetTcpNonBlockConnect(NULL,server.masterhost,server.masterport);
+    fd = anetTcpNonBlockConnect(NULL,server.masterhost,server.masterport); // 创建非阻塞 TCP 连接
     if (fd == -1) {
         redisLog(REDIS_WARNING,"Unable to connect to MASTER: %s",
             strerror(errno));
@@ -1528,7 +1579,7 @@ int connectWithMaster(void) {
     }
 
     // 监听主服务器 fd 的读和写事件，并绑定文件事件处理器
-    if (aeCreateFileEvent(server.el,fd,AE_READABLE|AE_WRITABLE,syncWithMaster,NULL) ==
+    if (aeCreateFileEvent(server.el,fd,AE_READABLE|AE_WRITABLE,syncWithMaster/*设置事件回调syncWithMaster*/,NULL) ==
             AE_ERR)
     {
         close(fd);
@@ -1540,8 +1591,8 @@ int connectWithMaster(void) {
     server.repl_transfer_lastio = server.unixtime;
     server.repl_transfer_s = fd;
 
-    // 将状态改为已连接
-    server.repl_state = REDIS_REPL_CONNECTING;
+    // 将状态改为正在连接中。。。
+    server.repl_state = REDIS_REPL_CONNECTING; //更新repl_state，正在连接中
 
     return REDIS_OK;
 }
@@ -1592,7 +1643,7 @@ int cancelReplicationHandshake(void) {
 }
 
 /* Set replication to the specified master address and port. */
-// 将服务器设为指定地址的从服务器
+// 将服务器设为指定地址的从服务器 slaveof <master_ip> <master_port> 命令的执行函数
 void replicationSetMaster(char *ip, int port) {
 
     // 清除原有的主服务器地址（如果有的话）
@@ -1608,7 +1659,7 @@ void replicationSetMaster(char *ip, int port) {
 
     // 如果之前有其他地址，那么释放它
     if (server.master) freeClient(server.master);
-    // 断开所有从服务器的连接，强制所有从服务器执行重同步
+    // 断开所有从服务器的连接，强制所有从服务器执行重新同步
     disconnectSlaves(); /* Force our slaves to resync with us as well. */
     // 清空可能有的 master 缓存，因为已经不会执行 PSYNC 了
     replicationDiscardCachedMaster(); /* Don't try a PSYNC. */
@@ -1618,7 +1669,7 @@ void replicationSetMaster(char *ip, int port) {
     cancelReplicationHandshake();
 
     // 进入连接状态（重点）
-    server.repl_state = REDIS_REPL_CONNECT;
+    server.repl_state = REDIS_REPL_CONNECT; //设置repl_state，准备开始replication  
     server.master_repl_offset = 0;
     server.repl_down_since = 0;
 }
@@ -1651,6 +1702,7 @@ void replicationUnsetMaster(void) {
     server.repl_state = REDIS_REPL_NONE;
 }
 
+// 执行sloaveof命令
 void slaveofCommand(redisClient *c) {
     /* SLAVEOF is not allowed in cluster mode as replication is automatically
      * configured using the current address of the master node. */
@@ -2185,11 +2237,11 @@ long long replicationGetSlaveOffset(void) {
 /* --------------------------- REPLICATION CRON  ---------------------------- */
 
 /* Replication cron funciton, called 1 time per second. */
-// 复制 cron 函数，每秒调用一次
+// 复制 cron 函数，每秒调用一次。 //Replicationcron是复制的调度中心，由redis唯一timeEvent的回调函数serverCron每秒执行一次 
 void replicationCron(void) {
 
     /* Non blocking connection timeout? */
-    // 尝试连接到主服务器，但超时
+    // 尝试连接到主服务器，但超时。 //slave非阻塞连接超时，从服务器给主服务器发ping的时候超时
     if (server.masterhost &&
         (server.repl_state == REDIS_REPL_CONNECTING ||
          server.repl_state == REDIS_REPL_RECEIVE_PONG) &&
@@ -2201,7 +2253,7 @@ void replicationCron(void) {
     }
 
     /* Bulk transfer I/O timeout? */
-    // RDB 文件的传送已超时？
+    // RDB 文件的传送已超时？ //slave receiving .rdb超时  
     if (server.masterhost && server.repl_state == REDIS_REPL_TRANSFER &&
         (time(NULL)-server.repl_transfer_lastio) > server.repl_timeout)
     {
@@ -2211,7 +2263,7 @@ void replicationCron(void) {
     }
 
     /* Timed out master when we are an already connected slave? */
-    // 从服务器曾经连接上主服务器，但现在超时
+    // 从服务器曾经连接上主服务器，但现在超时。 //slave连接上主服务器后出现交互超时 
     if (server.masterhost && server.repl_state == REDIS_REPL_CONNECTED &&
         (time(NULL)-server.master->lastinteraction) > server.repl_timeout)
     {
@@ -2221,7 +2273,7 @@ void replicationCron(void) {
     }
 
     /* Check if we should connect to a MASTER */
-    // 尝试连接主服务器
+    // 尝试连接主服务器 //slave检查是否需要连接主服务器  
     if (server.repl_state == REDIS_REPL_CONNECT) {
         redisLog(REDIS_NOTICE,"Connecting to MASTER %s:%d",
             server.masterhost, server.masterport);
@@ -2242,7 +2294,7 @@ void replicationCron(void) {
     
     /* If we have attached slaves, PING them from time to time.
      *
-     * 如果服务器有从服务器，定时向它们发送 PING 。
+     * 如果服务器有从服务器，定时向它们发送 PING 。这是本地服务器是主服务器的情况下
      *
      * So slaves can implement an explicit timeout to masters, and will
      * be able to detect a link disconnection even if the TCP connection
