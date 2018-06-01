@@ -167,27 +167,28 @@
 #define REDIS_CMD_SKIP_MONITOR 2048         /* "M" flag */
 #define REDIS_CMD_ASKING 4096               /* "k" flag */
 
-/* Object types */
+/* Object types 
+*/
 // 对象类型
-#define REDIS_STRING 0
-#define REDIS_LIST 1
-#define REDIS_SET 2
-#define REDIS_ZSET 3
-#define REDIS_HASH 4
+#define REDIS_STRING 0  //字符串对象
+#define REDIS_LIST 1    //列表对象
+#define REDIS_SET 2     // 集合
+#define REDIS_ZSET 3    // 有序集合
+#define REDIS_HASH 4    // 哈希对象
 
 /* Objects encoding. Some kind of objects like Strings and Hashes can be
  * internally represented in multiple ways. The 'encoding' field of the object
  * is set to one of this fields for this object. */
 // 对象编码
-#define REDIS_ENCODING_RAW 0     /* Raw representation */
-#define REDIS_ENCODING_INT 1     /* Encoded as integer */
+#define REDIS_ENCODING_RAW 0     /* Raw representation 原始表示方式，字符串对象是简单动态字符串 */
+#define REDIS_ENCODING_INT 1     /* Encoded as integer long类型的整数 整数值实现的字符串对象*/
 #define REDIS_ENCODING_HT 2      /* Encoded as hash table */
 #define REDIS_ENCODING_ZIPMAP 3  /* Encoded as zipmap */
 #define REDIS_ENCODING_LINKEDLIST 4 /* Encoded as regular linked list */
 #define REDIS_ENCODING_ZIPLIST 5 /* Encoded as ziplist */
 #define REDIS_ENCODING_INTSET 6  /* Encoded as intset */
 #define REDIS_ENCODING_SKIPLIST 7  /* Encoded as skiplist */
-#define REDIS_ENCODING_EMBSTR 8  /* Embedded sds string encoding */
+#define REDIS_ENCODING_EMBSTR 8  /* Embedded sds string encoding embstr编码的简单动态字符串*/
 
 /* Defines related to the dump file format. To store 32 bits lengths for short
  * keys requires a lot of space, so we check the most significant 2 bits of
@@ -222,10 +223,11 @@
 #define REDIS_AOF_WAIT_REWRITE 2    /* AOF waits rewrite to start appending */
 
 /* Client flags */
-#define REDIS_SLAVE (1<<0)   /* This client is a slave server */
-#define REDIS_MASTER (1<<1)  /* This client is a master server */
-#define REDIS_MONITOR (1<<2) /* This client is a slave monitor, see MONITOR */
-#define REDIS_MULTI (1<<3)   /* This client is in a MULTI context */
+// 客户端标识，可以代表多种信息，或的关系
+#define REDIS_SLAVE (1<<0)  // 标识这是一个从机  /* This client is a slave server */
+#define REDIS_MASTER (1<<1) // 这是一个主机  /* This client is a master server */
+#define REDIS_MONITOR (1<<2) // 这是一个monitor /* This client is a slave monitor, see MONITOR */
+#define REDIS_MULTI (1<<3)   // 这个客户端正在执行multi操作，事务 /* This client is in a MULTI context */
 #define REDIS_BLOCKED (1<<4) /* The client is waiting in a blocking operation */
 #define REDIS_DIRTY_CAS (1<<5) /* Watched keys modified. EXEC will fail. */
 #define REDIS_CLOSE_AFTER_REPLY (1<<6) /* Close after writing entire reply. */
@@ -399,6 +401,17 @@ typedef long long mstime_t; /* millisecond time type. */
 /* The actual Redis Object */
 /*
  * Redis 对象
+ * 对象结构robj功能：
+        为5种不同的对象类型提供同一的表示形式。
+        为不同的对象适用于不同的场景，支持同一种对象类型采用多种的数据结构方式。
+        支持引用计数，实现对象共享机制。
+        记录对象的访问时间，便于删除对象。
+
+        #define OBJ_STRING 0    //字符串对象
+        #define OBJ_LIST 1      //列表对象
+        #define OBJ_SET 2       //集合对象
+        #define OBJ_ZSET 3      //有序集合对象
+        #define OBJ_HASH 4      //哈希对象
  */
 #define REDIS_LRU_BITS 24
 #define REDIS_LRU_CLOCK_MAX ((1<<REDIS_LRU_BITS)-1) /* Max value of obj->lru */
@@ -406,18 +419,18 @@ typedef long long mstime_t; /* millisecond time type. */
 typedef struct redisObject {
 
     // 类型
-    unsigned type:4;
+    unsigned type:4; // 对象的数据类型，占4bits，共5种类型
 
     // 编码
-    unsigned encoding:4;
+    unsigned encoding:4; // 对象的编码类型，占4bits，共10种类型
 
-    // 对象最后一次被访问的时间
+    // 对象最后一次被访问的时间。便于删除对象 lru
     unsigned lru:REDIS_LRU_BITS; /* lru time (relative to server.lruclock) */
 
-    // 引用计数
+    // 引用计数。可实现对象共享机制
     int refcount;
 
-    // 指向实际值的指针
+    // 指向实际值的指针。为5种不同对象类型提供了同一的表达形式
     void *ptr;
 
 } robj;
@@ -1788,10 +1801,10 @@ unsigned long setTypeSize(robj *subject);
 void setTypeConvert(robj *subject, int enc);
 
 /* Hash data type */
-void hashTypeConvert(robj *o, int enc);
+void hashTypeConvert(robj *o, int enc); // 对哈希对象 o 的编码方式进行转换
 void hashTypeTryConversion(robj *subject, robj **argv, int start, int end);
 void hashTypeTryObjectEncoding(robj *subject, robj **o1, robj **o2);
-robj *hashTypeGetObject(robj *o, robj *key);
+robj *hashTypeGetObject(robj *o, robj *key); // 从 hash 中取出域 field 的值，并返回一个值对象
 int hashTypeExists(robj *o, robj *key);
 int hashTypeSet(robj *o, robj *key, robj *value);
 int hashTypeDelete(robj *o, robj *key);

@@ -40,12 +40,12 @@ robj *createObject(int type, void *ptr) {
     robj *o = zmalloc(sizeof(*o));
 
     o->type = type;
-    o->encoding = REDIS_ENCODING_RAW;
+    o->encoding = REDIS_ENCODING_RAW; // 设置编码方式为OBJ_ENCODING_RAW
     o->ptr = ptr;
-    o->refcount = 1;
+    o->refcount = 1; //引用计数为1
 
     /* Set the LRU to the current lruclock (minutes resolution). */
-    o->lru = LRU_CLOCK();
+    o->lru = LRU_CLOCK(); //计算设置当前LRU时间
     return o;
 }
 

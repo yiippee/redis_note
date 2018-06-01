@@ -130,7 +130,7 @@ void multiCommand(redisClient *c) {
     }
 
     // 打开事务 FLAG
-    c->flags |= REDIS_MULTI;
+    c->flags |= REDIS_MULTI; // 添加事务标识
 
     addReply(c,shared.ok);
 }

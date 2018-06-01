@@ -145,7 +145,7 @@ int hashTypeGetFromHashTable(robj *o, robj *field, robj **value) {
     redisAssert(o->encoding == REDIS_ENCODING_HT);
 
     // 在字典中查找域（键）
-    de = dictFind(o->ptr, field);
+    de = dictFind(o->ptr/*指向实际值的指针*/, field);
 
     // 键不存在
     if (de == NULL) return -1;

@@ -109,7 +109,7 @@ uint32_t dictGetHashFunctionSeed(void) {
 
 /* MurmurHash2, by Austin Appleby
  * Note - This code makes a few assumptions about how your machine behaves -
- * 1. We can read a 4-byte value from any address without crashing
+ * 1. We can read a 4-byte value from any address without crashing 从任何地址读取4个字节不会崩溃
  * 2. sizeof(int) == 4
  *
  * And it has a few limitations -
@@ -848,7 +848,7 @@ dictEntry *dictFind(dict *d, const void *key)
         // 如果程序遍历完 0 号哈希表，仍然没找到指定的键的节点
         // 那么程序会检查字典是否在进行 rehash ，
         // 然后才决定是直接返回 NULL ，还是继续查找 1 号哈希表
-        if (!dictIsRehashing(d)) return NULL;
+        if (!dictIsRehashing(d)) return NULL; // 如果正在rehash，则继续查找 1 号哈希表，否则直接返回null
     }
 
     // 进行到这里时，说明两个哈希表都没找到
