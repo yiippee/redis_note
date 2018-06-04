@@ -2376,7 +2376,7 @@ int clusterProcessPacket(clusterLink *link) {
             message = createStringObject(
                         (char*)hdr->data.publish.msg.bulk_data+channel_len,
                         message_len);
-            // 发送消息
+            // 发送消息。收到其他节点发送的publish消息，自己将消息publish到连接此节点的所有订阅client
             pubsubPublishMessage(channel,message);
 
             decrRefCount(channel);
@@ -2948,7 +2948,7 @@ void clusterSendPublish(clusterLink *link, robj *channel, robj *message) {
     if (link)
         clusterSendMessage(link,payload,totlen);
     else
-        clusterBroadcastMessage(payload,totlen);
+        clusterBroadcastMessage(payload,totlen); // redis将发布的消息广播到整个集群，因为不知道到底哪个节点订阅了，所以全部广播
 
     decrRefCount(channel);
     decrRefCount(message);
