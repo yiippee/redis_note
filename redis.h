@@ -681,14 +681,17 @@ typedef struct redisClient {
     // 被监视的键
     list *watched_keys;     /* Keys WATCHED for MULTI/EXEC CAS */
 
+    // redisClient中订阅相关的
     // 这个字典记录了客户端所有订阅的频道
     // 键为频道名字，值为 NULL
     // 也即是，一个频道的集合
-    dict *pubsub_channels;  /* channels a client is interested in (SUBSCRIBE) */
+    // 使用该字典能够快速判断客户端是否订阅了某频道。
+    dict *pubsub_channels; // 在表示客户端的结构体redisClient中，使用字典pubsub_channels记录该客户端都订阅了哪些频道： /* channels a client is interested in (SUBSCRIBE) */
 
     // 链表，包含多个 pubsubPattern 结构
     // 记录了所有订阅频道的客户端的信息
     // 新 pubsubPattern 结构总是被添加到表尾
+    // 记录该客户端都订阅了哪些频道模式，列表中的元素就是频道模式名
     list *pubsub_patterns;  /* patterns a client is interested in (SUBSCRIBE) */
     sds peerid;             /* Cached peer ID. */
 
@@ -1280,6 +1283,9 @@ struct redisServer {
     // 字典，键为频道，值为链表
     // 链表中保存了所有订阅某个频道的客户端
     // 新客户端总是被添加到链表的表尾
+
+    // 具体的频道名为key，而value是一个列表，该列表中记录了订阅该频道的所有客户端。
+    // 当向某频道发布消息时，就是通过查询该字典，将消息发送给订阅该频道的所有客户端
     dict *pubsub_channels;  /* Map channels to list of subscribed clients */
 
     // 这个链表记录了客户端订阅的所有模式的名字

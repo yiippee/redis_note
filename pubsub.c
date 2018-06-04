@@ -476,7 +476,7 @@ int pubsubPublishMessage(robj *channel, robj *message) {
 void subscribeCommand(redisClient *c) {
     int j;
 
-    for (j = 1; j < c->argc; j++)
+    for (j = 1; j < c->argc; j++) // 针对命令参数中的每一个channel，调用函数pubsubSubscribeChannel，将客户端c和该channel，记录到相应数据结构中
         pubsubSubscribeChannel(c,c->argv[j]);
 }
 
@@ -509,6 +509,7 @@ void punsubscribeCommand(redisClient *c) {
     }
 }
 
+// 发布消息
 void publishCommand(redisClient *c) {
 
     int receivers = pubsubPublishMessage(c->argv[1],c->argv[2]);
