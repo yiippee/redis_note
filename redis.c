@@ -3956,7 +3956,7 @@ int main(int argc, char **argv) {
      * data structures with master nodes to monitor. */
     // 如果服务器以 Sentinel 模式启动，那么进行 Sentinel 功能相关的初始化
     // 并为要监视的主服务器创建一些相应的数据结构
-    if (server.sentinel_mode) {
+    if (server.sentinel_mode) { // Sentinel本质上是一个运行在特殊模式下的redis服务器
         initSentinelConfig();
         initSentinel();
     }

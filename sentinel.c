@@ -173,15 +173,40 @@ typedef struct sentinelAddr {
 #define SENTINEL_SCRIPT_MAX_RETRY 10
 // 脚本重试之前的延迟时间
 #define SENTINEL_SCRIPT_RETRY_DELAY 30000 /* 30 seconds between retries. */
+/*
+sentinel 和 redis cluster 区别：
+sentinel是解决HA high availability 高可用性 问题的，cluster是解决sharding问题的，不重复，并且经常一起用。
+sentinel主要还是注重高可用性，将主机和从机切换这个过程自动化，实现高可用。
+cluster关注内存的扩展，可以超过单机的内存，而且在一些组合键操作中有一定的局限性，因为不能跨机器操作，所以像发布订阅也是无脑地广播。
+Sentinel是一种自动failover的解决方案。Cluster是一种分片的方案，自带failover，使用Cluster时不需要再用Sentinel。
+*/
 
+/*
+Sentinel集群：
+1.和其他集群不同，你无须设置其他Sentinel的地址，Sentinel进程可以通过发布与订阅来自动发现正在监视相同主实例的其他Sentinel。
+    当一个 Sentinel 发现一个新的 Sentinel 时，它会将新的 Sentinel 添加到一个列表中，
+    这个列表保存了 Sentinel 已知的，监视同一个主服务器的所有其他Sentinel。
+2.Sentinel集群中的Sentinel不会再同一时刻并发去failover同一个master，第一个进行failover的Sentinel如果失败了（上文配置的failover-timeout），
+    另外一个才会重新进行failover，以此类推。
+3.当Sentinel将一个slave选举为master并发送SLAVE OF NO ONE后，即使其它的slave还没针对新master重新配置自己，failover也被认为是成功了。
+4.上述过度过程中，若此时重启old master，则redis集群将处于无master状态，此时只能手动修改配置文件，然后重新启动集群.
+5.Master-Slave切换后，Sentinel会改写master，slave和sentinel的conf配置文件。
+6.一旦一个Sentinel成功地对一个master进行了failover，它将会把关于master的最新配置通过广播形式通知其它sentinel，其它的Sentinel则更新对应master的配置。
+*/
 // Sentinel 会为每个被监视的 Redis 实例创建相应的 sentinelRedisInstance 实例
 // （被监视的实例可以是主服务器、从服务器、或者其他 Sentinel ）
+// Redis-sentinel本身也是一个独立运行的进程，它能监控多个master-slave集群，发现master宕机后能进行自动切换
+// 虽然 Redis Sentinel 释出为一个单独的可执行文件 redis-sentinel ， 
+// 但实际上它只是一个运行在特殊模式下的 Redis 服务器， 
+// 你可以在启动一个普通 Redis 服务器时通过给定 --sentinel 选项来启动 Redis Sentinel 
+// sentinel的作用是将主机和从机切换这个过程自动化，实现高可用。
+// Sentinel本身也支持集群，只使用单个sentinel进程来监控redis集群是不可靠的，当sentinel进程宕掉后，sentinel本身也有单点问题。
 typedef struct sentinelRedisInstance {
     
-    // 标识值，记录了实例的类型，以及该实例的当前状态
+    // 标识值，记录了实例的类型，以及该实例的当前状态。主服务器为 SRI_MASTER，从服务器为 SRI_SLAVE
     int flags;      /* See SRI_... defines */
     
-    // 实例的名字
+    // 实例的名字。主服务器和从服务器是不一样的：
     // 主服务器的名字由用户在配置文件中设置
     // 从服务器以及 Sentinel 的名字由 Sentinel 自动设置
     // 格式为 ip:port ，例如 "127.0.0.1:26379"
@@ -277,7 +302,8 @@ typedef struct sentinelRedisInstance {
 
     // 如果这个实例代表的是一个主服务器
     // 那么这个字典保存着主服务器属下的从服务器
-    // 字典的键是从服务器的名字，字典的值是从服务器对应的 sentinelRedisInstance 结构
+    // 字典的键是从服务器的名字（比如 127.0.0.1:8888 ip:port），字典的值是从服务器对应的 sentinelRedisInstance 实例结构，感觉有点递归？
+    // sentinel 会根据主服务返回的 info命令 信息获取从服务器的相关信息。如果从服务器对应的实例存在，则更新原有实例；如果不存在，则新建。
     dict *slaves;       /* Slaves for this master instance. */
 
     // SENTINEL monitor <master-name> <IP> <port> <quorum> 选项中的 quorum 参数
@@ -367,7 +393,7 @@ typedef struct sentinelRedisInstance {
 /* Sentinel 的状态结构 */
 struct sentinelState {
 
-    // 当前纪元
+    // 当前纪元。当前状态，现阶段。 用于实现故障转移
     uint64_t current_epoch;     /* Current epoch. */
 
     // 保存了所有被这个 sentinel 监视的主服务器
@@ -392,7 +418,7 @@ struct sentinelState {
     // 一个 FIFO 队列，包含了所有需要执行的用户脚本
     list *scripts_queue;    /* Queue of user scripts to execute. */
 
-} sentinel;
+} sentinel; // 定义了一个全局的sentinel，用于表示sentinel的状态结构
 
 /* A script execution job. */
 // 脚本运行状态
@@ -654,10 +680,10 @@ void initSentinel(void) {
 
     /* Initialize various data structures. */
     /* 初始化 Sentinel 的状态 */
-    // 初始化纪元
+    // 初始化纪元。epoch就是当前状态，现阶段的意思
     sentinel.current_epoch = 0;
 
-    // 初始化保存主服务器信息的字典
+    // 初始化保存主服务器信息的字典。初始化被sentinel监视的主服务器和从服务器相关信息
     sentinel.masters = dictCreate(&instancesDictType,NULL);
 
     // 初始化 TILT 模式的相关选项
