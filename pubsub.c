@@ -397,6 +397,8 @@ int pubsubPublishMessage(robj *channel, robj *message) {
     /* Send to clients listening for that channel */
     // 取出包含所有订阅频道 channel 的客户端的链表
     // 并将消息发送给它们
+    // 如果没有客户端订阅，那么直接跳过，所以必须先有客户端订阅，发布才有效果
+    // redis对于没有订阅客户端的消息不会缓存，而是直接丢弃。所以对于发布者来说，可以大胆发布，收不收得到是订阅者的问题。
     de = dictFind(server.pubsub_channels,channel);
     if (de) {
         list *list = dictGetVal(de);
