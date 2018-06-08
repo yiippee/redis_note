@@ -2485,17 +2485,17 @@ void call(redisClient *c, int flags) {
         if (c->flags & REDIS_FORCE_AOF) flags |= REDIS_PROPAGATE_AOF;
 
         // 如果数据库有被修改，那么启用 REPL 和 AOF 传播
-        if (dirty) // dirty表示自从上次 SAVE 执行以来，数据库被修改的次数
+        if (dirty) // dirty表示自从上次 SAVE 执行以来，数据库被修改的次数.设计到新增，修改，删除都会更新dirty，查询不会。
             flags |= (REDIS_PROPAGATE_REPL | REDIS_PROPAGATE_AOF);
 
         if (flags != REDIS_PROPAGATE_NONE)
+            // 将命令进行传播到repl或者aof
             propagate(c->cmd,c->db->id,c->argv,c->argc,flags);
     }
 
     /* Restore the old FORCE_AOF/REPL flags, since call can be executed
      * recursively. */
-    // 将客户端的 FLAG 恢复到命令执行之前
-    // 因为 call 可能会递归执行
+    // 将客户端的 FLAG 恢复到命令执行之前，因为 call 可能会递归执行
     c->flags &= ~(REDIS_FORCE_AOF|REDIS_FORCE_REPL);
     c->flags |= client_old_flags & (REDIS_FORCE_AOF|REDIS_FORCE_REPL);
 
@@ -2584,11 +2584,11 @@ int processCommand(redisClient *c) {
      *    命令的发送者是本节点的主节点
      *
      * 2) The command has no key arguments. 
-     *    命令没有 key 参数
+     *    命令没有 key 参数。 如果命令没有key参数，就不需要转向，因为集群时按照key的hash值来确定所在的节点，如果没有key，自然就不存在找节点的事了。
      */
-    if (server.cluster_enabled &&
-        !(c->flags & REDIS_MASTER) &&
-        !(c->cmd->getkeys_proc == NULL && c->cmd->firstkey == 0))
+    if (server.cluster_enabled && // 开启了集群
+        !(c->flags & REDIS_MASTER) && // 命令发送方不是主机
+        !(c->cmd->getkeys_proc == NULL && c->cmd->firstkey == 0)) // key值存在
     {
         int hashslot;
 
@@ -2601,16 +2601,18 @@ int processCommand(redisClient *c) {
         // 集群运作正常
         } else {
             int error_code;
-            clusterNode *n = getNodeByQuery(c,c->cmd,c->argv,c->argc,&hashslot,&error_code);
+            clusterNode *n = getNodeByQuery(c,c->cmd,c->argv,c->argc,&hashslot,&error_code/*并返回错误码*/);
             // 不能执行多键处理命令
             if (n == NULL) {
                 flagTransaction(c);
                 if (error_code == REDIS_CLUSTER_REDIR_CROSS_SLOT) {
+                    // 键在其他槽
                     addReplySds(c,sdsnew("-CROSSSLOT Keys in request don't hash to the same slot\r\n"));
                 } else if (error_code == REDIS_CLUSTER_REDIR_UNSTABLE) {
                     /* The request spawns mutliple keys in the same slot,
                      * but the slot is not "stable" currently as there is
                      * a migration or import in progress. */
+                    // 节点正在进行迁移
                     addReplySds(c,sdsnew("-TRYAGAIN Multiple keys request during rehashing of slot\r\n"));
                 } else {
                     redisPanic("getNodeByQuery() unknown error.");
@@ -2706,6 +2708,7 @@ int processCommand(redisClient *c) {
     // 在订阅于发布模式的上下文中，只能执行订阅和退订相关的命令
     if ((dictSize(c->pubsub_channels) > 0 || listLength(c->pubsub_patterns) > 0)
         &&
+        // 如果不是订阅和退订等命令，则报错
         c->cmd->proc != subscribeCommand &&
         c->cmd->proc != unsubscribeCommand &&
         c->cmd->proc != psubscribeCommand &&
@@ -2752,6 +2755,7 @@ int processCommand(redisClient *c) {
     }
 
     /* Exec the command */
+    // 执行事务命令
     if (c->flags & REDIS_MULTI &&
         c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
         c->cmd->proc != multiCommand && c->cmd->proc != watchCommand)
@@ -3877,9 +3881,9 @@ void memtest(size_t megabytes, int passes);
 int checkForSentinelMode(int argc, char **argv) {
     int j;
 
-    if (strstr(argv[0],"redis-sentinel") != NULL) return 1;
+    if (strstr(argv[0],"redis-sentinel") != NULL) return 1; // 如果执行的是 redis-sentinel就直接是sentinel模式了，因为这是额外编译的一个bin了
     for (j = 1; j < argc; j++)
-        if (!strcmp(argv[j],"--sentinel")) return 1;
+        if (!strcmp(argv[j],"--sentinel")) return 1; // 如果执行的 redis-server 且参数是 --sentinel 则也是sentinel模式了
     return 0;
 }
 
@@ -4065,6 +4069,7 @@ int main(int argc, char **argv) {
         if (server.sofd > 0)
             redisLog(REDIS_NOTICE,"The server is now ready to accept connections at %s", server.unixsocket);
     } else {
+        // 如果是在sentinel mode运行
         sentinelIsRunning();
     }
 

@@ -5612,7 +5612,7 @@ clusterNode *getNodeByQuery(redisClient *c, struct redisCommand *cmd, robj **arg
 
     robj *firstkey = NULL;
     int multiple_keys = 0;
-    multiState *ms, _ms;
+    multiState *ms, _ms; // 事务状态
     multiCmd mc;
     int i, slot = 0, migrating_slot = 0, importing_slot = 0, missing_keys = 0;
 
@@ -5624,10 +5624,10 @@ clusterNode *getNodeByQuery(redisClient *c, struct redisCommand *cmd, robj **arg
     // 集群可以执行事务，
     // 但必须确保事务中的所有命令都是针对某个相同的键进行的
     // 这个 if 和接下来的 for 进行的就是这一合法性检测
-    if (cmd->proc == execCommand) {
+    if (cmd->proc == execCommand /*如果执行的命令是 exec 命令，也就是事务执行命令*/) {
         /* If REDIS_MULTI flag is not set EXEC is just going to return an
          * error. */
-        if (!(c->flags & REDIS_MULTI)) return myself;
+        if (!(c->flags & REDIS_MULTI)/*如果不是事务操作，返回*/) return myself;
         ms = &c->mstate;
     } else {
         /* In order to have a single codepath create a fake Multi State
@@ -5643,6 +5643,7 @@ clusterNode *getNodeByQuery(redisClient *c, struct redisCommand *cmd, robj **arg
 
     /* Check that all the keys are in the same hash slot, and obtain this
      * slot and the node associated. */
+    // 确定事务中的所有key是否在同一个节点
     for (i = 0; i < ms->count; i++) {
         struct redisCommand *mcmd;
         robj **margv;
@@ -5652,7 +5653,7 @@ clusterNode *getNodeByQuery(redisClient *c, struct redisCommand *cmd, robj **arg
         margc = ms->commands[i].argc;
         margv = ms->commands[i].argv;
 
-        // 定位命令的键位置
+        // 定位命令的键位置,并获得命令键数量 numkeys
         keyindex = getKeysFromCommand(mcmd,margv,margc,&numkeys);
         // 遍历命令中的所有键
         for (j = 0; j < numkeys; j++) {
@@ -5677,8 +5678,10 @@ clusterNode *getNodeByQuery(redisClient *c, struct redisCommand *cmd, robj **arg
                 if (n == myself &&
                     server.cluster->migrating_slots_to[slot] != NULL)
                 {
+                    // 记录要从当前节点迁移到目标节点的槽
                     migrating_slot = 1;
                 } else if (server.cluster->importing_slots_from[slot] != NULL) {
+                    // 记录要从源节点迁移到本节点的槽
                     importing_slot = 1;
                 }
             } else {
@@ -5686,6 +5689,7 @@ clusterNode *getNodeByQuery(redisClient *c, struct redisCommand *cmd, robj **arg
                  * the same key as the first we saw. */
                 if (!equalStringObjects(firstkey,thiskey)) {
                     if (slot != thisslot) {
+                        // 执行事务时，如果key不在同一个节点，报错
                         /* Error: multiple keys from different slots. */
                         getKeysFreeResult(keyindex);
                         if (error_code)
@@ -5703,6 +5707,7 @@ clusterNode *getNodeByQuery(redisClient *c, struct redisCommand *cmd, robj **arg
             if ((migrating_slot || importing_slot) &&
                 lookupKeyRead(&server.db[0],thiskey) == NULL)
             {
+                // 如果从数据库中未找到，则记录
                 missing_keys++;
             }
         }
@@ -5721,20 +5726,21 @@ clusterNode *getNodeByQuery(redisClient *c, struct redisCommand *cmd, robj **arg
 
     /* If we don't have all the keys and we are migrating the slot, send
      * an ASK redirection. */
+    // 如果有未命中的key，同时本节点正在迁移槽，发送ask转向命令
     if (migrating_slot && missing_keys) {
         if (error_code) *error_code = REDIS_CLUSTER_REDIR_ASK; // 如果正在迁徙节点数据，发一次ask转向就可以了，不需要moved
-        return server.cluster->migrating_slots_to[slot];
+        return server.cluster->migrating_slots_to[slot]; // 将转向的目标槽发给客户端，让客户端重定向
     }
 
     /* If we are receiving the slot, and the client correctly flagged the
      * request as "ASKING", we can serve the request. However if the request
      * involves multiple keys and we don't have them all, the only option is
      * to send a TRYAGAIN error. */
-    if (importing_slot &&
+    if (importing_slot && // 正在接收槽转移，同时收到的是ask转向命令
         (c->flags & REDIS_ASKING || cmd->flags & REDIS_CMD_ASKING))
     {
-        if (multiple_keys && missing_keys) {
-            if (error_code) *error_code = REDIS_CLUSTER_REDIR_UNSTABLE;
+        if (multiple_keys && missing_keys) { // 如果key不在同一节点，且有未命中的key。未命中的key都是来自于数据库中的。则发送一个节点正在分片的操作，请待会儿再试。
+            if (error_code) *error_code = REDIS_CLUSTER_REDIR_UNSTABLE; // 键所处的槽正在进行 reshard
             return NULL;
         } else {
             return myself;
@@ -5756,6 +5762,6 @@ clusterNode *getNodeByQuery(redisClient *c, struct redisCommand *cmd, robj **arg
      * myself, set error_code to MOVED since we need to issue a rediretion. */
     if (n != myself && error_code) *error_code = REDIS_CLUSTER_REDIR_MOVED; // 发送moved指令，将长期转向
 
-    // 返回负责处理槽 slot 的节点 n
+    // 返回负责处理槽 slot 的节点 n,如果没找到到就是null
     return n;
 }

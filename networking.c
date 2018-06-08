@@ -1464,7 +1464,7 @@ int processMultibulkBuffer(redisClient *c) {
             // 清空参数长度
             c->bulklen = -1;
 
-            // 减少还需读入的参数个数
+            // 减少还需读入的参数个数,并进入下一次循环进行读取数据
             c->multibulklen--;
         }
     }
