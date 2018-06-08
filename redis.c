@@ -1583,6 +1583,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         argv[0] = createStringObject("REPLCONF",8);
         argv[1] = createStringObject("GETACK",6);
         argv[2] = createStringObject("*",1); /* Not used argument. */
+        // 给从服务器发送ack
         replicationFeedSlaves(server.slaves, server.slaveseldb, argv, 3);
         decrRefCount(argv[0]);
         decrRefCount(argv[1]);
@@ -2387,11 +2388,11 @@ struct redisCommand *lookupCommandOrOriginal(sds name) {
 void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
                int flags)
 {
-    // 传播到 AOF
+    // 传播到 AOF  也是非常实时的
     if (server.aof_state != REDIS_AOF_OFF && flags & REDIS_PROPAGATE_AOF)
         feedAppendOnlyFile(cmd,dbid,argv,argc);
 
-    // 传播到 slave
+    // 传播到 slave. 从redis源码看来，主从复制是非常实时的，每一条命令都会传播给从机
     if (flags & REDIS_PROPAGATE_REPL)
         replicationFeedSlaves(server.slaves,dbid,argv,argc);
 }
@@ -2767,7 +2768,7 @@ int processCommand(redisClient *c) {
         addReply(c,shared.queued);
     } else {
         // 执行命令
-        call(c,REDIS_CALL_FULL);
+        call(c,REDIS_CALL_FULL); // REDIS_CALL_FULL 代表执行所有的附带操作，比如复制给从服务器等
 
         c->woff = server.master_repl_offset;
         // 处理那些解除了阻塞的键

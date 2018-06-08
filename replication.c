@@ -226,7 +226,7 @@ void feedReplicationBacklogWithObject(robj *o) {
 // 将传入的参数发送给从服务器
 // 操作分为三步：
 // 1） 构建协议内容
-// 2） 将协议内容备份到 backlog
+// 2） 将协议内容备份到 backlog. backlog就是一个缓存，有可能从机没有在线，那么下次从机上线时与主机核对偏移量，且偏移量还backlog合法范围内，则进行部分同步。
 // 3） 将内容发送给各个从服务器
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     listNode *ln;
@@ -2318,6 +2318,7 @@ void replicationCron(void) {
         /* First, send PING */
         // 向所有已连接 slave （状态为 ONLINE）发送 PING
         ping_argv[0] = createStringObject("PING",4);
+        // 向从服务器周期性发送ping
         replicationFeedSlaves(server.slaves, server.slaveseldb, ping_argv, 1);
         decrRefCount(ping_argv[0]);
 
