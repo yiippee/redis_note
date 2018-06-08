@@ -2388,6 +2388,8 @@ struct redisCommand *lookupCommandOrOriginal(sds name) {
 void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
                int flags)
 {
+    // 只有redis数据有修改了才会传播
+    
     // 传播到 AOF  也是非常实时的
     if (server.aof_state != REDIS_AOF_OFF && flags & REDIS_PROPAGATE_AOF)
         feedAppendOnlyFile(cmd,dbid,argv,argc);
@@ -2487,6 +2489,7 @@ void call(redisClient *c, int flags) {
 
         // 如果数据库有被修改，那么启用 REPL 和 AOF 传播
         if (dirty) // dirty表示自从上次 SAVE 执行以来，数据库被修改的次数.设计到新增，修改，删除都会更新dirty，查询不会。
+            // dirty 大于0 说明有修改了，需要传播到从机中和aof中
             flags |= (REDIS_PROPAGATE_REPL | REDIS_PROPAGATE_AOF);
 
         if (flags != REDIS_PROPAGATE_NONE)
