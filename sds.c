@@ -91,7 +91,7 @@ sds sdsnewlen(const void *init, size_t initlen) {
     // 以 \0 结尾
     sh->buf[initlen] = '\0';
 
-    // 返回 buf 部分，而不是整个 sdshdr
+    // 返回 buf 部分，而不是整个 sdshdr。返回buf，感觉主要是为了以后与 C 语言中标准的字符串处理函数兼容
     return (char*)sh->buf;
 }
 
@@ -154,7 +154,7 @@ sds sdsdup(const sds s) {
  */
 /* Free an sds string. No operation is performed if 's' is NULL. */
 void sdsfree(sds s) {
-    if (s == NULL) return;
+    if (s == NULL) return; // 如果释放的s为null则直接返回
     zfree(s-sizeof(struct sdshdr));
 }
 
@@ -222,7 +222,7 @@ void sdsclear(sds s) {
  * 复杂度
  *  T = O(N)
  */
-sds sdsMakeRoomFor(sds s, size_t addlen) {
+sds sdsMakeRoomFor(sds s, size_t addlen) { // 对sds中的buf进行扩容
 
     struct sdshdr *sh, *newsh;
 
@@ -1377,6 +1377,7 @@ sds sdsjoin(char **argv, int argc, char *sep) {
     return join;
 }
 
+#define SDS_TEST_MAIN
 #ifdef SDS_TEST_MAIN
 #include <stdio.h>
 #include "testhelp.h"

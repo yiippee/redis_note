@@ -34,7 +34,7 @@
 /*
  * 最大预分配长度
  */
-#define SDS_MAX_PREALLOC (1024*1024)
+#define SDS_MAX_PREALLOC (1024*1024) // 1M
 
 #include <sys/types.h>
 #include <stdarg.h>
@@ -45,7 +45,12 @@
 typedef char *sds;
 
 /*
- * 保存字符串对象的结构
+ * 保存字符串对象的结构。这种结构跟golang中的slice数组很相似啊。
+ type Slice struct {
+    ptr   unsafe.Pointer    // Array pointer
+    len   int               // slice length
+    cap   int               // slice capacity
+}
  */
 struct sdshdr {
     
@@ -65,6 +70,8 @@ struct sdshdr {
  * T = O(1)
  */
 static inline size_t sdslen(const sds s) {
+    // s - sizeof(struct sdshdr) 得到的是指向sdshdr的一个指针，相当于指针往上移动了，所以指向了sds的头部，
+    // 强制转换为sdshdr类型后，可直接获取len字段
     struct sdshdr *sh = (void*)(s-(sizeof(struct sdshdr)));
     return sh->len;
 }

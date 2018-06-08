@@ -1151,7 +1151,7 @@ int clientsCronResizeQueryBuffer(redisClient *c) {
          (querybuf_size > 1024 && idletime > 2))
     {
         /* Only resize the query buffer if it is actually wasting space. */
-        if (sdsavail(c->querybuf) > 1024) {
+        if (sdsavail(c->querybuf) > 1024) { // 如果free空间大于1024则进行空间裁剪为0
             c->querybuf = sdsRemoveFreeSpace(c->querybuf);
         }
     }
