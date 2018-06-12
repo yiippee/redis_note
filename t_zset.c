@@ -193,7 +193,7 @@ int zslRandomLevel(void) {
  * 
  * 函数的返回值为新节点。
  *
- * T_wrost = O(N^2), T_avg = O(N log N)
+ * T_wrost = O(N^2), T_avg = O(N log N) 插入效率感觉有点低啊，难道是因为范围查找更快了吗？
  */
 zskiplistNode *zslInsert(zskiplist *zsl, double score, robj *obj) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;

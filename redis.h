@@ -308,7 +308,7 @@ redis的请求分为两种类型：
 #define REDIS_NOTUSED(V) ((void) V)
 
 #define ZSKIPLIST_MAXLEVEL 32 /* Should be enough for 2^32 elements */
-#define ZSKIPLIST_P 0.25      /* Skiplist P = 1/4 */
+#define ZSKIPLIST_P 0.25  // 整个跳转表平均每个节点包含的节点个数 = 1 / (1-p) = 1 / 0.75 = 1.33 比平衡树的2要小    /* Skiplist P = 1/4 */
 
 /* Append only defines */
 #define AOF_FSYNC_NO 0
@@ -754,12 +754,17 @@ typedef struct zskiplistNode {
         // 跨度
         unsigned int span;
 
-    } level[];
+    } level[]; // 同一份数据在不同层，是通过数组来管理起来的，这样就可以直接使用下表i来获取下一层的数据。
+               // 其实不是同一份数据，数据只有一份，不同层数中保存的是一个指针而已，所以还是很节约空间的。
 
 } zskiplistNode;
 
 /*
  * 跳跃表
+ * 在做范围查找的时候，平衡树比skiplist操作要复杂。
+ * 在平衡树上，我们找到指定范围的小值之后，还需要以中序遍历的顺序继续寻找其它不超过大值的节点。
+ * 如果不对平衡树进行一定的改造，这里的中序遍历并不容易实现。
+ * 而在skiplist上进行范围查找就非常简单，只需要在找到小值之后，对第1层链表进行若干步的遍历就可以实现。
  */
 typedef struct zskiplist {
 
